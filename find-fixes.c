@@ -6,6 +6,12 @@
  *
  * Author: Jeff Moyer <jmoyer@redhat.com>
  * Copyright(C) Red Hat, Inc., 2018
+ *
+ * TODO:
+ * - implement output_file
+ * - add a config file, at least to store the repo_dir
+ * - better usage text: document defaults, etc
+ * - factor out shared boilerplate between this and order-commits
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,21 +20,23 @@
 #include <libgen.h>
 #include <sys/types.h>
 #include <regex.h>
+#include <getopt.h>
 
 #include "ccan/list/list.h"
 #include "common.h"
 
-struct cid {
-	struct list_node	list;
-	char			hash[GIT_OID_HEXSZ + 1];
-};
 LIST_HEAD(cids);
 static regex_t preg;
+
+static char *repo_dir = ".";
+static char *input_file;
+static char *output_file;
 
 void
 usage(const char *prog)
 {
-	printf("%s <cid file> | <cid> [cid] ...\n", prog);
+	printf("%s [-r <repo path>] {-i <input cid file> | <cid> [cid] ...} "
+	       "[-o <output file>\n", prog);
 }
 
 void
@@ -98,9 +106,55 @@ prune_list(struct list_head *cids, git_oid *oid)
 }
 
 int
+parse_options(int argc, char **argv)
+{
+	int c;
+	static struct option long_options[] = {
+		{"repo",	required_argument, NULL, 'r' },
+		{"input-file",	required_argument, NULL, 'i' },
+		{"output-file",	required_argument, NULL, 'o' },
+	};
+
+	while (1) {
+		c = getopt_long(argc, argv, "r:i:o:", long_options, NULL);
+		if (c == -1)
+			break;
+
+		switch(c) {
+		case 'r':
+			repo_dir = strdup(optarg);
+			if (!repo_dir) {
+				perror("strdup");
+				return -1;
+			}
+			break;
+		case 'i':
+			input_file = strdup(optarg);
+			if (!input_file) {
+				perror("strdup");
+				return -1;
+			}
+			break;
+		case 'o':
+			output_file = strdup(optarg);
+			if (!output_file) {
+				perror("strdup");
+				return -1;
+			}
+			break;
+		default:
+			printf("Invalid argument '%c'\n", c);
+			return -1;
+		}
+	}
+
+	return optind;
+}
+
+int
 main(int argc, char **argv)
 {
-	int i, ret;
+	int i, ret, next_opt;
 	git_repository *repo;
 	git_revwalk *walker;
 	git_oid oid;
@@ -108,52 +162,54 @@ main(int argc, char **argv)
 	struct cid *cid, *fix;
 	const char *msg;
 
-	if (argc < 2) {
+	next_opt = parse_options(argc, argv);
+	if (next_opt < 0)
+		exit(1);
+	if (next_opt == argc && !input_file) {
+		printf("No commit hashes specified.\n");
 		usage(basename(argv[0]));
 		exit(1);
 	}
 
 	git_libgit2_init();
-
-	ret = git_repository_open(&repo, ".");
+	ret = git_repository_open(&repo, repo_dir);
 	if (ret < 0) {
 		liberror("git_repository_open");
 		exit(1);
 	}
+
+	if (next_opt < argc) {
+		/* any remaining arguments are commit hashes to check */
+		for (i = next_opt; i < argc; i++) {
+			if (add_commit(repo, &cids, argv[i]))
+				exit(1);
+		}
+	}
+	if (input_file) {
+		ret = add_hashes_from_file(repo, input_file, &cids);
+		if (ret)
+			exit(1);
+	}
+
 	ret = git_revwalk_new(&walker, repo);
 	if (ret < 0) {
 		liberror("git_revwalk_new");
 		exit(1);
 	}
-	ret = git_revwalk_push_head(walker);
+	/*
+	 * Walk the history of the master branch, not whatever happens
+	 * to be checked out right now.
+	 */
+	ret = git_revwalk_push_ref(walker, "refs/heads/master");
 	if (ret < 0) {
-		liberror("git_revwalk_push_head");
+		liberror("git_revwalk_push_ref");
 		exit(1);
 	}
 
+	git_revwalk_sorting(walker, GIT_SORT_TIME);
+
+	/* regex for extracting Fixes tags from commit messages */
 	regcomp(&preg, "^Fixes: ([0-9a-fA-F]+)", REG_EXTENDED|REG_NEWLINE);
-
-	/*
-	 * Look up the commit hashes to make sure they exist and are
-	 * unique.
-	 */
-	for (i = 1; i < argc; i++) {
-
-		if (strlen(argv[i]) > GIT_OID_HEXSZ) {
-			fprintf(stderr, "Invalid commit hash: \"%s\"\n",
-				argv[i]);
-			exit(1);
-		}
-
-		cid = malloc(sizeof(*cid));
-		ret = abbrev_to_full_hash(repo, argv[i],
-					  strlen(argv[i]), cid->hash);
-		if (ret < 0) {
-			liberror("invalid hash\n");
-			exit(1);
-		}
-		list_add(&cids, &cid->list);
-	}
 
 	while (git_revwalk_next(&oid, walker) == 0) {
 		LIST_HEAD(fixes);

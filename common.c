@@ -40,3 +40,60 @@ abbrev_to_full_hash(git_repository *repo, char *abbrev, int len, char *out)
 	return 0;
 }
 
+/*
+ * Look up the commit hashes to make sure they exist and are unique.
+ */
+int
+add_commit(git_repository *repo, struct list_head *list, char *commit_hash)
+{
+	int ret;
+	int len = strlen(commit_hash);
+	struct cid *cid;
+
+	if (len > GIT_OID_HEXSZ) {
+		fprintf(stderr, "Invalid commit hash: \"%s\"\n", commit_hash);
+		return -1;
+	}
+
+	cid = malloc(sizeof(*cid));
+	ret = abbrev_to_full_hash(repo, commit_hash, len, cid->hash);
+	if (ret < 0) {
+		liberror("invalid hash");
+		printf("%s\n", commit_hash);
+		return -1;
+	}
+	list_add(list, &cid->list);
+	return 0;
+}
+
+int
+add_hashes_from_file(git_repository *repo, char *filename,
+		     struct list_head *list)
+{
+	FILE *fp;
+	int ret;
+	char line[GIT_OID_HEXSZ + 1];
+
+	fp = fopen(filename, "r");
+	if (!fp) {
+		perror("fopen");
+		return -1;
+	}
+
+	while (fgets(line, GIT_OID_HEXSZ + 1, fp) != NULL) {
+		int len = strlen(line);
+		if (line[len-1] == '\n')
+			line[len-1] = '\0';
+		ret = add_commit(repo, list, line);
+		if (ret) {
+			fclose(fp);
+			return ret;
+		}
+	}
+	if (ferror(fp)) {
+		perror("fgets");
+		return -1;
+	}
+	fclose(fp);
+	return 0;
+}
