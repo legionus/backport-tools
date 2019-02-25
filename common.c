@@ -84,6 +84,9 @@ add_hashes_from_file(git_repository *repo, char *filename,
 		int len = strlen(line);
 		if (line[len-1] == '\n')
 			line[len-1] = '\0';
+		/* check for empty line */
+		if (strlen(line) == 0)
+			continue;
 		ret = add_commit(repo, list, line);
 		if (ret) {
 			fclose(fp);
