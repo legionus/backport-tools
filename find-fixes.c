@@ -238,6 +238,10 @@ main(int argc, char **argv)
 		list_head_init(&fixes);
 		extract_fixes_tags(repo, msg, &fixes);
 
+		/*
+		 * Check to see if the Fixes: tags contain commit hashes
+		 * requested by the user.
+		 */
 		list_for_each(&fixes, fix, list) {
 			list_for_each(&cids, cid, list) {
 				if (!memcmp(fix->hash, cid->hash,
