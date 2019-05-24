@@ -23,9 +23,11 @@ order-commits: order-commits.c ccan/list/list.o common.o
 	$(CC) $(COMMON_CFLAGS) $(INCLUDE) -o $@ $^ $(LDFLAGS)
 
 find-fixes: find-fixes.c ccan/list/list.o common.o
-	$(CC) $(COMMON_CFLAGS) $(INCLUDE) -o $@ $^ $(LDFLAGS)
+	$(MAKE) -C ccan/ciniparser
+	$(CC) $(COMMON_CFLAGS) $(INCLUDE) -o $@ $^ ccan/ciniparser/ciniparser.o ccan/ciniparser/dictionary.o $(LDFLAGS)
 
 clean:
+	$(MAKE) -C ccan/ciniparser $@
 	@rm -f $(PROGS) *.o ccan/list/list.o
 
 distclean: clean

@@ -9,9 +9,9 @@
  *
  * TODO:
  * - implement output_file
- * - add a config file, at least to store the repo_dir
  * - better usage text: document defaults, etc
  * - factor out shared boilerplate between this and order-commits
+ * - allow user to override default branch
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,11 +23,14 @@
 #include <getopt.h>
 
 #include "ccan/list/list.h"
+#include "ccan/ciniparser/ciniparser.h"
 #include "common.h"
+
+#define CONFIG_FILE ".backportrc"
 
 static regex_t preg;
 
-static char *repo_dir = ".";
+static char *repo_dir;
 static char *input_file;
 static char *output_file;
 
@@ -36,6 +39,50 @@ usage(const char *prog)
 {
 	printf("%s [-r <repo path>] {-i <input cid file> | <cid> [cid] ...} "
 	       "[-o <output file>\n", prog);
+}
+
+/*
+ * config file name: ~/.backportrc
+ *
+ * ini-style config file.  Only one entry, currently:
+ *
+ * [repo]
+ * path = /sbox/src/kernel/upstream/linux
+ */
+void
+parse_config_file()
+{
+	dictionary *d;
+	char *str;
+	char config_file[FILENAME_MAX];
+	char *homedir;
+
+	homedir = getenv("HOME");
+	if (!homedir) {
+		perror("getenv");
+		return;
+	}
+	snprintf(config_file, FILENAME_MAX, "%s/%s", homedir, CONFIG_FILE);
+
+	d = ciniparser_load(config_file);
+	if (!d)
+		return;
+
+	/*
+	 * We want to destroy the dictionary once we're done parsing
+	 * the ini file.  However, that will free the memory returned
+	 * from ciniparser_getstring.  So, strdup the returned value.
+	 */
+	str = ciniparser_getstring(d, "repo:path", NULL);
+	if (str) {
+		repo_dir = strdup(str);
+		if (!repo_dir) {
+			perror("strdup");
+			exit(1);
+		}
+	}
+
+	ciniparser_freedict(d);
 }
 
 void
@@ -121,6 +168,8 @@ parse_options(int argc, char **argv)
 
 		switch(c) {
 		case 'r':
+			if (repo_dir)
+				free(repo_dir);
 			repo_dir = strdup(optarg);
 			if (!repo_dir) {
 				perror("strdup");
@@ -241,6 +290,8 @@ main(int argc, char **argv)
 	LIST_HEAD(cids);
 	LIST_HEAD(result);
 
+	parse_config_file();
+
 	next_opt = parse_options(argc, argv);
 	if (next_opt < 0)
 		exit(1);
@@ -249,6 +300,13 @@ main(int argc, char **argv)
 		usage(basename(argv[0]));
 		exit(1);
 	}
+
+	/*
+	 * Set repo_dir to PWD if it was not specified in the config
+	 * file or on the command line.
+	 */
+	if (!repo_dir)
+		repo_dir = ".";
 
 	/* regex for extracting Fixes tags from commit messages */
 	regcomp(&preg, "^Fixes: ([0-9a-fA-F]+)", REG_EXTENDED|REG_NEWLINE);
