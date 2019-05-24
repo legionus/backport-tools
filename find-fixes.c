@@ -5,7 +5,7 @@
  * provided on the commandline.
  *
  * Author: Jeff Moyer <jmoyer@redhat.com>
- * Copyright(C) Red Hat, Inc., 2018
+ * Copyright(C) Red Hat, Inc., 2018, 2019
  *
  * TODO:
  * - implement output_file
@@ -227,6 +227,7 @@ next:
 		git_commit_free(commit);
 	}
 
+	git_revwalk_reset(walker);
 	return nr_found;
 }
 
@@ -280,13 +281,28 @@ main(int argc, char **argv)
 		exit(1);
 	}
 
-	ret = find_fixes(repo, walker, &cids, &result);
-	if (ret < 0)
-		exit(1);
+	/*
+	 * Find any commits with Fixes: tags that reference the cids
+	 * listed on the command line.  This loop also finds fixes
+	 * to the fixes, and fixes to the fixes to the fixes, etc.
+	 */
+	while (1) {
+		ret = find_fixes(repo, walker, &cids, &result);
+		if (ret <= 0)
+			break;
 
-	/* print out the results */
-	list_for_each(&result, cid, list)
-		printf("%s\n", cid->hash);
+		/* print out the results */
+		list_for_each(&result, cid, list)
+			printf("%s\n", cid->hash);
+
+		/*
+		 * Move the "Fixes:" commits into the cids list, and
+		 * re-run the walk.  This will find the fixes for the
+		 * fixes (for the fixes (for the fixes....))
+		 */
+		list_head_init(&cids);
+		list_prepend_list(&cids, &result);
+	}
 
 	free_cids(&result);
 	free_cids(&cids);
