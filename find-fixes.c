@@ -25,7 +25,6 @@
 #include "ccan/list/list.h"
 #include "common.h"
 
-LIST_HEAD(cids);
 static regex_t preg;
 
 static char *repo_dir = ".";
@@ -151,16 +150,95 @@ parse_options(int argc, char **argv)
 	return optind;
 }
 
+/*
+ * Find any commit ids with a Fixes: tag matching those listed in cids.
+ *
+ * Return value: Number of commits with Fixes: tags pointing to @cids.
+ */
+int
+find_fixes(git_repository *repo, git_revwalk *walker,
+	   struct list_head *cids, struct list_head *result)
+{
+	int nr_found = 0;
+	int ret;
+	git_oid oid;
+	git_commit *commit = NULL;
+	struct cid *cid, *fix;
+	const char *msg;
+
+	/*
+	 * Walk the history of the master branch, not whatever happens
+	 * to be checked out right now.
+	 */
+	ret = git_revwalk_push_ref(walker, "refs/heads/master");
+	if (ret < 0) {
+		liberror("git_revwalk_push_ref");
+		exit(1);
+	}
+
+	git_revwalk_sorting(walker, GIT_SORT_TIME);
+
+	while (git_revwalk_next(&oid, walker) == 0) {
+		LIST_HEAD(fixes);
+
+		/*
+		 * Check to see if we've passed a commit, and
+		 * therefore no longer need to check for fixes for it.
+		 * Do this first, as there's no use checking to see if
+		 * this commit fixed something else on the list.
+		 * After all, we've already included it.
+		 */
+		if (prune_list(cids, &oid)) {
+			if (list_empty(cids))
+				break;
+			continue;
+		}
+
+		ret = git_commit_lookup(&commit, repo, &oid);
+		if (ret < 0) {
+			liberror("git_commit_lookup");
+			continue;
+		}
+
+		msg = git_commit_message(commit);
+
+		list_head_init(&fixes);
+		extract_fixes_tags(repo, msg, &fixes);
+
+		/*
+		 * Check to see if the Fixes: tags contain commit hashes
+		 * requested by the user.
+		 */
+		list_for_each(&fixes, fix, list) {
+			list_for_each(cids, cid, list) {
+				if (!memcmp(fix->hash, cid->hash,
+					    GIT_OID_HEXSZ)) {
+					char *hash = git_oid_tostr_s(&oid);
+					ret = add_commit(repo, result, hash);
+					if (ret)
+						return -1;
+					nr_found++;
+					goto next;
+				}
+			}
+		}
+next:
+		free_cids(&fixes);
+		git_commit_free(commit);
+	}
+
+	return nr_found;
+}
+
 int
 main(int argc, char **argv)
 {
 	int i, ret, next_opt;
 	git_repository *repo;
 	git_revwalk *walker;
-	git_oid oid;
-	git_commit *commit = NULL;
-	struct cid *cid, *fix;
-	const char *msg;
+	struct cid *cid;
+	LIST_HEAD(cids);
+	LIST_HEAD(result);
 
 	next_opt = parse_options(argc, argv);
 	if (next_opt < 0)
@@ -170,6 +248,11 @@ main(int argc, char **argv)
 		usage(basename(argv[0]));
 		exit(1);
 	}
+
+	/* regex for extracting Fixes tags from commit messages */
+	regcomp(&preg, "^Fixes: ([0-9a-fA-F]+)", REG_EXTENDED|REG_NEWLINE);
+	list_head_init(&cids);
+	list_head_init(&result);
 
 	git_libgit2_init();
 	ret = git_repository_open(&repo, repo_dir);
@@ -196,65 +279,17 @@ main(int argc, char **argv)
 		liberror("git_revwalk_new");
 		exit(1);
 	}
-	/*
-	 * Walk the history of the master branch, not whatever happens
-	 * to be checked out right now.
-	 */
-	ret = git_revwalk_push_ref(walker, "refs/heads/master");
-	if (ret < 0) {
-		liberror("git_revwalk_push_ref");
+
+	ret = find_fixes(repo, walker, &cids, &result);
+	if (ret < 0)
 		exit(1);
-	}
 
-	git_revwalk_sorting(walker, GIT_SORT_TIME);
+	/* print out the results */
+	list_for_each(&result, cid, list)
+		printf("%s\n", cid->hash);
 
-	/* regex for extracting Fixes tags from commit messages */
-	regcomp(&preg, "^Fixes: ([0-9a-fA-F]+)", REG_EXTENDED|REG_NEWLINE);
-
-	while (git_revwalk_next(&oid, walker) == 0) {
-		LIST_HEAD(fixes);
-
-		/*
-		 * Check to see if we've passed a commit, and
-		 * therefore no longer need to check for fixes for it.
-		 * Do this first, as there's no use checking to see if
-		 * this commit fixed something else on the list.
-		 * After all, we've already included it.
-		 */
-		if (prune_list(&cids, &oid)) {
-			if (list_empty(&cids))
-				break;
-			continue;
-		}
-
-		ret = git_commit_lookup(&commit, repo, &oid);
-		if (ret < 0) {
-			liberror("git_commit_lookup");
-			continue;
-		}
-
-		msg = git_commit_message(commit);
-
-		list_head_init(&fixes);
-		extract_fixes_tags(repo, msg, &fixes);
-
-		/*
-		 * Check to see if the Fixes: tags contain commit hashes
-		 * requested by the user.
-		 */
-		list_for_each(&fixes, fix, list) {
-			list_for_each(&cids, cid, list) {
-				if (!memcmp(fix->hash, cid->hash,
-					    GIT_OID_HEXSZ)) {
-					printf("%s\n", git_oid_tostr_s(&oid));
-					goto next;
-				}
-			}
-		}
-next:
-		free_cids(&fixes);
-		git_commit_free(commit);
-	}
+	free_cids(&result);
+	free_cids(&cids);
 
 	git_revwalk_free(walker);
 	git_repository_free(repo);
