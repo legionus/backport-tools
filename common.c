@@ -59,7 +59,7 @@ add_commit(git_repository *repo, struct list_head *list, char *commit_hash)
 	ret = abbrev_to_full_hash(repo, commit_hash, len, cid->hash);
 	if (ret < 0) {
 		liberror("invalid hash");
-		printf("%s\n", commit_hash);
+		printf("\"%s\"\n", commit_hash);
 		return -1;
 	}
 	list_add(list, &cid->list);
