@@ -85,6 +85,7 @@ main(int argc, char **argv)
 	git_repository *repo;
 	git_revwalk *walker;
 	git_oid oid;
+	FILE *stream = stdout;
 	struct cid *cid, *next;
 
 	next_opt = parse_options(argc, argv);
@@ -157,19 +158,27 @@ main(int argc, char **argv)
 			break;
 	}
 
-
 	if (!list_empty(&unordered)) {
-		printf("Unable to find the following commit(s) in the tree:\n");
+		fprintf(stderr, "Unable to find the following commit(s) in the tree:\n");
 		list_for_each_safe(&unordered, cid, next, list) {
-			printf("%s\n", cid->hash);
+			fprintf(stderr, "%s\n", cid->hash);
 			list_del(&cid->list);
 			free(cid);
+		}
+		fprintf(stderr, "\n");
+	}
+
+	if (output_file) {
+		stream = fopen(output_file, "w+");
+		if (!stream) {
+			perror("fopen");
+			stream = stdout;
 		}
 	}
 
 	if (!list_empty(&ordered)) {
 		list_for_each_safe(&ordered, cid, next, list) {
-			printf("%s\n", cid->hash);
+			fprintf(stream, "%s\n", cid->hash);
 			list_del(&cid->list);
 			free(cid);
 		}

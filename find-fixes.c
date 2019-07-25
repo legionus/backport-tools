@@ -8,7 +8,6 @@
  * Copyright(C) Red Hat, Inc., 2018, 2019
  *
  * TODO:
- * - implement output_file
  * - better usage text: document defaults, etc
  * - factor out shared boilerplate between this and order-commits
  * - allow user to override default branch
@@ -289,6 +288,7 @@ main(int argc, char **argv)
 	struct cid *cid;
 	LIST_HEAD(cids);
 	LIST_HEAD(result);
+	FILE *stream = stdout;
 
 	parse_config_file();
 
@@ -339,6 +339,14 @@ main(int argc, char **argv)
 		exit(1);
 	}
 
+	if (output_file) {
+		stream = fopen(output_file, "w+");
+		if (!stream) {
+			perror("fopen");
+			stream = stdout;
+		}
+	}
+
 	/*
 	 * Find any commits with Fixes: tags that reference the cids
 	 * listed on the command line.  This loop also finds fixes
@@ -351,7 +359,7 @@ main(int argc, char **argv)
 
 		/* print out the results */
 		list_for_each(&result, cid, list)
-			printf("%s\n", cid->hash);
+			fprintf(stream, "%s\n", cid->hash);
 
 		/*
 		 * Move the "Fixes:" commits into the cids list, and
