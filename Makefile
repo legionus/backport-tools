@@ -3,7 +3,7 @@ COMMON_CFLAGS=-W -Wall -Wextra -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE -O2
 INCLUDE=-I$(PWD)
 LDFLAGS=-lgit2
 
-PROGS=order-commits find-fixes
+PROGS=order-commits find-fixes find-missing-commits
 
 all: $(PROGS)
 
@@ -23,6 +23,10 @@ order-commits: order-commits.c ccan/list/list.o common.o
 	$(CC) $(COMMON_CFLAGS) $(INCLUDE) -o $@ $^ $(LDFLAGS)
 
 find-fixes: find-fixes.c ccan/list/list.o common.o
+	$(MAKE) -C ccan/ciniparser
+	$(CC) $(COMMON_CFLAGS) $(INCLUDE) -o $@ $^ ccan/ciniparser/ciniparser.o ccan/ciniparser/dictionary.o $(LDFLAGS)
+
+find-missing-commits: find-missing-commits.c common.o ccan/list/list.o
 	$(MAKE) -C ccan/ciniparser
 	$(CC) $(COMMON_CFLAGS) $(INCLUDE) -o $@ $^ ccan/ciniparser/ciniparser.o ccan/ciniparser/dictionary.o $(LDFLAGS)
 

@@ -41,7 +41,22 @@ abbrev_to_full_hash(git_repository *repo, char *abbrev, int len, char *out)
 }
 
 /*
- * Look up the commit hashes to make sure they exist and are unique.
+ * Add commit_hash to list.  No validation of the hash is performed, so
+ * only call this function with a known valid hash.
+ */
+void
+__add_commit(struct list_head *list, char *commit_hash)
+{
+	struct cid *cid = malloc(sizeof(*cid));
+
+	memcpy(cid->hash, commit_hash, GIT_OID_HEXSZ);
+	cid->hash[GIT_OID_HEXSZ] = '\0';
+	list_add(list, &cid->list);
+}
+
+/*
+ * Add commit_hash to list.  Look up the commit hashes to make sure
+ * they exist and are unique.
  */
 int
 add_commit(git_repository *repo, struct list_head *list, char *commit_hash)

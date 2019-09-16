@@ -31,6 +31,11 @@ int add_commit(git_repository *repo, struct list_head *list,
 	       char *commit_hash);
 
 /*
+ * Add commit_hash to list.  No validation is performed.
+ */
+void __add_commit(struct list_head *list, char *commit_hash);
+
+/*
  * Open filename and read in a list of commit hashes.  Validate the
  * commit hashes and add them to list.
  *
