@@ -31,12 +31,14 @@
  * correct downstream hash to start the history walk.
  *
  * TODO:
+ * - walk upstream and downstream in parallel
  * - change from a list to a hash table
  * - better usage text: document defaults, etc
- * - try to figure out the right downstream branch
+ * - try to figure out the right downstream branch automatically
  * - keep a tree of commits in order, so we can print out a sorted list
  *   of commits, from start to finish.  Otherwise, user needs to run output
  *   through order-commits.
+ * - performance improvements
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,6 +62,8 @@ static char *upstream_repo_dir, *downstream_repo_dir;
 static char *downstream_branch = "refs/heads/master";
 static char *start_commit;
 static char *output_file;
+
+#define SIZE_1G (1024 * 1024 * 1024)
 
 void
 usage(const char *prog)
@@ -235,82 +239,69 @@ parse_options(int argc, char **argv)
 	return optind;
 }
 
-/* if set, limits commit list to the specified paths */
-static int path_match = 0;
 git_diff_options diffopts = GIT_DIFF_OPTIONS_INIT;
 
 bool
-commit_modifies_paths(git_diff_options *diffopts,
-		      git_commit *commit, git_repository *repo)
+commit_modifies_paths(git_diff_options *diffopts, git_commit *commit)
 {
+	int i, ret, ret2;
 	git_tree *commit_tree = NULL, *parent_tree = NULL;
+	git_tree_entry *commit_ent, *parent_ent;
 	git_commit *parent = NULL;
-	unsigned num_parents;
-	git_diff *diff = NULL;
 	bool modified = false;
 
-	/*
-	 * If path matching isn't enabled, all commits are interesting.
-	 */
-	if (!path_match)
+	/* If no paths were specified, all commits are interesting. */
+	if (diffopts->pathspec.count == 0)
 		return true;
 
-	num_parents = git_commit_parentcount(commit);
-	if (num_parents) {
-		if (git_commit_parent(&parent, commit, 0) < 0) {
-			liberror("git_commit_parent");
-			return false;
-		}
-		if (git_commit_tree(&parent_tree, parent) < 0) {
-			liberror("git_commit_tree");
-			goto out_free_parent;
-		}
+	if (git_commit_parent(&parent, commit, 0) < 0) {
+		return false;
 	}
 
 	if (git_commit_tree(&commit_tree, commit) < 0) {
 		liberror("git_commit_tree");
-		goto out_free_parent_tree;
-	}
-
-	/*
-	 * If there are no parents for this commit, return true if the
-	 * requested paths exist in the tree.  Otherwise, diff the two
-	 * trees to see if there are any relevant changes.
-	 */
-	if (num_parents > 0) {
-		if (git_diff_tree_to_tree(&diff, repo, parent_tree,
-					  commit_tree, diffopts) < 0) {
-			liberror("git_diff_tree_to_tree");
-			goto out_free_commit_tree;
-		}
-		/*
-		 * If ndeltas is non-zero, this commit touches paths that the
-		 * user is interested in.
-		 */
-		modified = !!git_diff_num_deltas(diff);
-		git_diff_free(diff);
-	} else {
-		git_pathspec *ps;
-
-		if (git_pathspec_new(&ps, &diffopts->pathspec) < 0) {
-			liberror("git_pathspec_new");
-			goto out_free_commit_tree;
-		}
-		if (git_pathspec_match_tree(NULL, commit_tree,
-					GIT_PATHSPEC_NO_MATCH_ERROR, ps) == 0)
-			modified = true;
-		git_pathspec_free(ps);
-	}
-
-out_free_commit_tree:
-	git_tree_free(commit_tree);
-out_free_parent_tree:
-	if (num_parents)
-		git_tree_free(parent_tree);
-out_free_parent:
-	if (num_parents)
 		git_commit_free(parent);
+		return false;
+	}
 
+	if (git_commit_tree(&parent_tree, commit) < 0) {
+		liberror("git_commit_tree");
+		git_tree_free(commit_tree);
+		git_commit_free(parent);
+		return false;
+	}
+
+	for (i = 0; i < (int)diffopts->pathspec.count; i++) {
+		ret = git_tree_entry_bypath(&parent_ent, parent_tree,
+					    diffopts->pathspec.strings[i]);
+		ret2 = git_tree_entry_bypath(&commit_ent, commit_tree,
+					     diffopts->pathspec.strings[i]);
+		/*
+		 * If the path only exists in one revision, that means
+		 * it was "changed".  If it doesn't exist in either
+		 * revision, skip it.
+		 */
+		if (ret && ret == ret2)
+			continue;
+		else if (ret != ret2) {
+			modified = true;
+		} else {
+			/* If the file changed, then the hash will change */
+			if (!git_oid_equal(git_tree_entry_id(parent_ent),
+					   git_tree_entry_id(commit_ent)))
+				modified = true;
+		}
+		if (!ret)
+			git_tree_entry_free(parent_ent);
+		if (!ret2)
+			git_tree_entry_free(commit_ent);
+		if (modified)
+			break;
+	}
+
+	git_tree_free(commit_tree);
+	git_tree_free(parent_tree);
+	git_commit_free(parent);
 	return modified;
 }
 
@@ -476,7 +467,7 @@ walk_history(git_revwalk *walker, git_repository *repo, repo_type_t type,
 		 * Restrict to the paths we're interested in, and skip
 		 * merge commits.
 		 */
-		if (commit_modifies_paths(&diffopts, commit, repo) &&
+		if (commit_modifies_paths(&diffopts, commit) &&
 		    git_commit_parentcount(commit) <= 1) {
 
 			if (type == REPO_TYPE_UPSTREAM) {
@@ -511,7 +502,6 @@ main(int argc, char **argv)
 	if (next_opt < argc) {
 		diffopts.pathspec.strings = &argv[next_opt];
 		diffopts.pathspec.count = argc - next_opt;
-		path_match = 1;
 	}
 
 	if (!upstream_repo_dir || !downstream_repo_dir || !start_commit) {
