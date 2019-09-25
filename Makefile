@@ -16,6 +16,12 @@ config.h: tools_configurator_configurator
 ccan/list/list.o: ccan/list/list.c config.h
 	$(CC) $(INCLUDE) -c -o $@ $<
 
+ccan/hash/hash.o: ccan/hash/hash.c ccan/hash/hash.h
+	$(CC) $(INCLUDE) -c -o $@ $<
+
+ccan/htable/htable.o: ccan/htable/htable.c ccan/htable/htable.h
+	$(CC) $(INCLUDE) -c -o $@ $<
+
 common.o: common.c common.h
 	$(CC) $(COMMON_CFLAGS) $(INCLUDE) -c common.c
 
@@ -26,9 +32,9 @@ find-fixes: find-fixes.c ccan/list/list.o common.o
 	$(MAKE) -C ccan/ciniparser
 	$(CC) $(COMMON_CFLAGS) $(INCLUDE) -o $@ $^ ccan/ciniparser/ciniparser.o ccan/ciniparser/dictionary.o $(LDFLAGS)
 
-find-missing-commits: find-missing-commits.c common.o ccan/list/list.o
+find-missing-commits: find-missing-commits.c ccan/hash/hash.o ccan/htable/htable.o
 	$(MAKE) -C ccan/ciniparser
-	$(CC) $(COMMON_CFLAGS) $(INCLUDE) -o $@ $^ ccan/ciniparser/ciniparser.o ccan/ciniparser/dictionary.o $(LDFLAGS)
+	$(CC) $(COMMON_CFLAGS) $(INCLUDE) -o $@ $^ ccan/ciniparser/ciniparser.o ccan/ciniparser/dictionary.o $(LDFLAGS) -lpthread
 
 clean:
 	$(MAKE) -C ccan/ciniparser $@

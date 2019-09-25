@@ -48,10 +48,12 @@
 #include <sys/types.h>
 #include <regex.h>
 #include <getopt.h>
+#include <pthread.h>
+#include <git2.h>
 
-#include "ccan/list/list.h"
+#include "ccan/htable/htable.h"
+#include "ccan/hash/hash.h"
 #include "ccan/ciniparser/ciniparser.h"
-#include "common.h"
 
 #define CONFIG_FILE ".backportrc"
 
@@ -65,12 +67,26 @@ static char *output_file;
 
 #define SIZE_1G (1024 * 1024 * 1024)
 
+/*
+ * A hash table which keeps track of the commits from <start> to <end>
+ * is kept for each of the upstream and downstream repos.  The number
+ * of commits could be pretty large (10's of thousands), depending on
+ * the specified start commit.
+ */
+#define HTABLE_DEFAULT_ENTRIES (128*1024)
+
 void
 usage(const char *prog)
 {
 	printf(
 "%s -u <upstream repo path> -d <downstream repo path> -b <downstream branch>\n"
 "\t-s <start commit> -o <output file>[path[, path] ...] ", prog);
+}
+
+void
+liberror(const char *err)
+{
+	fprintf(stderr, "%s: %s\n", err, giterr_last()->message);
 }
 
 /*
@@ -118,14 +134,36 @@ parse_config_file()
 }
 
 void
-free_cids(struct list_head *head)
+free_cids(struct htable *ht)
 {
-	struct cid *cid, *next;
+	struct htable_iter i;
+	char *hash;
 
-	list_for_each_safe(head, cid, next, list) {
-		list_del(&cid->list);
-		free(cid);
+	hash = htable_first(ht, &i);
+	while (hash) {
+		htable_delval(ht, &i);
+		free(hash);
+		hash = htable_next(ht, &i);
 	}
+}
+
+static size_t
+commit_rehash(const void *e, void __attribute__((unused)) *unused)
+{
+	return hash_string(e);
+}
+
+static bool
+hash_cmp(const void *e, void *string)
+{
+	return(strcmp((char *)e, string) == 0);
+}
+
+void
+add_commit(struct htable *ht, const char *commit_hash)
+{
+	char *htable_ent = strdup(commit_hash);
+	htable_add(ht, hash_string(htable_ent), htable_ent);
 }
 
 /*
@@ -168,18 +206,17 @@ extract_backport(git_commit *commit, char *result)
  * Returns 1 if hash matched a hash on the list.  0 if no match.
  */
 int
-prune_list(struct list_head *cids, const char *hash)
+prune_list(struct htable *ht, const char *hash)
 {
-	struct cid *cid, *next;
-	
-	list_for_each_safe(cids, cid, next, list) {
-		if (!strncmp(hash, cid->hash, GIT_OID_HEXSZ)) {
-			list_del(&cid->list);
-			free(cid);
-			return 1;
-		}
-	}
-	return 0;
+	char *match;
+	size_t hashval = hash_string(hash);
+
+	match = htable_get(ht, hashval, hash_cmp, hash);
+	if (!match)
+		return 0;
+	htable_del(ht, hashval, match);
+	free(match);
+	return 1;
 }
 
 int
@@ -328,19 +365,13 @@ init_regexes(void)
  * must be allocated by the caller.
  */
 int
-find_backported_commit(git_repository *downstream_repo, const char *start_commit,
-		       int len, git_oid *out)
+find_backported_commit(git_repository *downstream_repo, git_revwalk *walker,
+		       const char *start_commit, int len, git_oid *out)
 {
 	int ret;
 	int found = 0;
-	git_revwalk *walker;
 	git_oid oid;
 
-	ret = git_revwalk_new(&walker, downstream_repo);
-	if (ret < 0) {
-		liberror("git_revwalk_new");
-		exit(1);
-	}
 	ret = git_revwalk_push_ref(walker, downstream_branch);
 	if (ret < 0) {
 		liberror("git_revwalk_push_ref");
@@ -371,7 +402,7 @@ find_backported_commit(git_repository *downstream_repo, const char *start_commit
 		}
 	}
 
-	git_revwalk_free(walker);
+	git_revwalk_reset(walker);
 	return found;
 }
 
@@ -381,7 +412,8 @@ typedef enum repo_type {
 } repo_type_t;
 
 git_object *
-revision_lookup(git_repository *repo, const char *spec, repo_type_t repo_type)
+revision_lookup(git_repository *repo, git_revwalk *walker,
+		const char *spec, repo_type_t repo_type)
 {
 	git_object *revision = 0;
 	git_oid backport_oid;
@@ -404,7 +436,8 @@ revision_lookup(git_repository *repo, const char *spec, repo_type_t repo_type)
 	 * OK, this is a downstream repo.  Check to see if "spec" was
 	 * backported.
 	 */
-	if (find_backported_commit(repo, spec, strlen(spec), &backport_oid)) {
+	if (find_backported_commit(repo, walker, spec, strlen(spec),
+				   &backport_oid)) {
 		ret = git_object_lookup(&revision, repo,
 					&backport_oid, GIT_OBJ_COMMIT);
 		if (ret < 0) {
@@ -416,18 +449,10 @@ revision_lookup(git_repository *repo, const char *spec, repo_type_t repo_type)
 	return revision;
 }
 
-git_revwalk *
-initialize_git_revwalk(git_repository *repo, git_object *start, const char *end)
+void
+initialize_git_revwalk(git_revwalk *walker, git_object *start, const char *end)
 {
-	git_revwalk *walker;
-	int ret;
-
-	ret = git_revwalk_new(&walker, repo);
-	if (ret < 0) {
-		liberror("git_revwalk_new");
-		exit(1);
-	}
-
+	git_revwalk_reset(walker); // XXX
 	if (git_revwalk_push_ref(walker, end) != 0) {
 		liberror("git_revwalk_push");
 		exit(1);
@@ -439,20 +464,41 @@ initialize_git_revwalk(git_repository *repo, git_object *start, const char *end)
 	}
 
 	git_revwalk_sorting(walker, GIT_SORT_TIME);
+}
+
+struct revwalk_args {
+	git_repository *repo;
+	repo_type_t type;
+	const char *startrev;
+	const char *endrev;
+	struct htable ht;
+};
+
+void *
+walk_history(void *p)
+{
+	struct revwalk_args *args = p;
+	int ret;
+	git_oid oid;
+	git_repository *repo = args->repo;
+	git_revwalk *walker;
+	git_object *start;
+
+	ret = git_revwalk_new(&walker, repo);
 	if (ret < 0) {
-		liberror("git_revwalk_hide_ref");
+		liberror("git_revwalk_new");
 		exit(1);
 	}
 
-	return walker;
-}
+	start = revision_lookup(repo, walker, args->startrev, args->type);
+	if (!start) {
+		fprintf(stderr, "Unable to find %s in %s repo.\n",
+			start_commit, args->type == REPO_TYPE_UPSTREAM ?
+			"upstream" : "downstream");
+		exit(1);
+	}
 
-void
-walk_history(git_revwalk *walker, git_repository *repo, repo_type_t type,
-	     struct list_head *missing_commits)
-{
-	int ret;
-	git_oid oid;
+	initialize_git_revwalk(walker, start, args->endrev);
 
 	while (git_revwalk_next(&oid, walker) == 0) {
 		char hash[GIT_OID_HEXSZ + 1];
@@ -470,16 +516,18 @@ walk_history(git_revwalk *walker, git_repository *repo, repo_type_t type,
 		 */
 		if (git_commit_parentcount(commit) == 1 &&
 		    commit_modifies_paths(&diffopts, commit)) {
-			if (type == REPO_TYPE_UPSTREAM) {
+			if (args->type == REPO_TYPE_UPSTREAM) {
 				git_oid_tostr(hash, GIT_OID_HEXSZ + 1, &oid);
-				__add_commit(missing_commits, hash);
-			} else {
-				if (extract_backport(commit, hash) == 0)
-					prune_list(missing_commits, hash);
+				add_commit(&args->ht, hash);
+			} else if (extract_backport(commit, hash) == 0) {
+				add_commit(&args->ht, hash);
 			}
 		}
 		git_commit_free(commit);
 	}
+
+	git_revwalk_free(walker);
+	return NULL;
 }
 
 int
@@ -487,10 +535,11 @@ main(int argc, char **argv)
 {
 	int ret, next_opt;
 	git_repository *upstream_repo, *downstream_repo;
-	git_revwalk *upstream_walker, *downstream_walker;
-	git_object *upstream_start, *downstream_start;
-	LIST_HEAD(missing_commits); /* present upstream, but not downstream */
-	struct cid *cid;
+	pthread_t workers[2];
+	struct revwalk_args upstream_args, downstream_args;
+	int upstream_status, downstream_status;
+	struct htable_iter i;
+	char *hash;
 
 	parse_config_file();
 	init_regexes();
@@ -521,43 +570,55 @@ main(int argc, char **argv)
 		exit(1);
 	}
 
-	upstream_start = revision_lookup(upstream_repo,
-					 start_commit, REPO_TYPE_UPSTREAM);
-	if (!upstream_start) {
-		fprintf(stderr, "Unable to find %s in upstream repo.\n",
-			start_commit);
+	upstream_args.repo = upstream_repo;
+	upstream_args.type = REPO_TYPE_UPSTREAM;
+	upstream_args.startrev = start_commit;
+	upstream_args.endrev = "refs/heads/master";
+	htable_init_sized(&upstream_args.ht, commit_rehash,
+			  NULL, HTABLE_DEFAULT_ENTRIES);
+	ret = pthread_create(&workers[0], NULL,
+			     walk_history, (void *)&upstream_args);
+	if (ret < 0) {
+		perror("pthread_create");
 		exit(1);
 	}
 
-	downstream_start = revision_lookup(downstream_repo,
-					   start_commit, REPO_TYPE_DOWNSTREAM);
-	if (!downstream_start) {
-		fprintf(stderr, "Unable to find %s in downstream repo.\n",
-			start_commit);
-		exit(1);
-	}	
+	downstream_args.repo = downstream_repo;
+	downstream_args.type = REPO_TYPE_DOWNSTREAM;
+	downstream_args.startrev = start_commit;
+	downstream_args.endrev = downstream_branch;
+	htable_init_sized(&downstream_args.ht, commit_rehash,
+			  NULL, HTABLE_DEFAULT_ENTRIES);
+	ret = pthread_create(&workers[1], NULL,
+			     walk_history, (void *)&downstream_args);
 
-	upstream_walker = initialize_git_revwalk(upstream_repo, upstream_start,
-					"refs/heads/master");
-	downstream_walker = initialize_git_revwalk(downstream_repo,
-					downstream_start, downstream_branch);
+	pthread_join(workers[0], (void *)&upstream_status);
+	pthread_join(workers[1], (void *)&downstream_status);
 
-	walk_history(upstream_walker, upstream_repo,
-		     REPO_TYPE_UPSTREAM, &missing_commits);
-	walk_history(downstream_walker, downstream_repo,
-		     REPO_TYPE_DOWNSTREAM, &missing_commits);
-
-	git_revwalk_free(upstream_walker);
 	git_repository_free(upstream_repo);
-	git_revwalk_free(downstream_walker);
 	git_repository_free(downstream_repo);
 
 	git_libgit2_shutdown();
 
-	/* print out the missing commits */
-	list_for_each(&missing_commits, cid, list) {
-		printf("%s\n", cid->hash);
+	hash = htable_first(&downstream_args.ht, &i);
+	if (!hash)
+		printf("Downstream hash table empty!\n");
+	while (hash) {
+		if (!prune_list(&upstream_args.ht, hash)) {
+			printf("Unable to find commit %s in upstream list\n",
+			       hash);
+		}
+		hash = htable_next(&downstream_args.ht, &i);
 	}
+
+	hash = htable_first(&upstream_args.ht, &i);
+	while (hash) {
+		printf("%s\n", hash);
+		hash = htable_next(&upstream_args.ht, &i);
+	}
+
+	free_cids(&upstream_args.ht);
+	free_cids(&downstream_args.ht);
 
 	return 0;
 }
