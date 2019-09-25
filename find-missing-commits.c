@@ -281,9 +281,10 @@ commit_modifies_paths(git_diff_options *diffopts, git_commit *commit)
 		 * it was "changed".  If it doesn't exist in either
 		 * revision, skip it.
 		 */
-		if (ret && ret == ret2)
+		if (ret == GIT_ENOTFOUND && ret2 == GIT_ENOTFOUND)
 			continue;
-		else if (ret != ret2) {
+		/* path exists in only commit or parent */
+		if (ret != ret2) {
 			modified = true;
 		} else {
 			/* If the file changed, then the hash will change */
@@ -467,9 +468,8 @@ walk_history(git_revwalk *walker, git_repository *repo, repo_type_t type,
 		 * Restrict to the paths we're interested in, and skip
 		 * merge commits.
 		 */
-		if (commit_modifies_paths(&diffopts, commit) &&
-		    git_commit_parentcount(commit) <= 1) {
-
+		if (git_commit_parentcount(commit) == 1 &&
+		    commit_modifies_paths(&diffopts, commit)) {
 			if (type == REPO_TYPE_UPSTREAM) {
 				git_oid_tostr(hash, GIT_OID_HEXSZ + 1, &oid);
 				__add_commit(missing_commits, hash);
@@ -477,7 +477,6 @@ walk_history(git_revwalk *walker, git_repository *repo, repo_type_t type,
 				if (extract_backport(commit, hash) == 0)
 					prune_list(missing_commits, hash);
 			}
-
 		}
 		git_commit_free(commit);
 	}
