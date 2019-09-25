@@ -264,7 +264,7 @@ commit_modifies_paths(git_diff_options *diffopts, git_commit *commit)
 		return false;
 	}
 
-	if (git_commit_tree(&parent_tree, commit) < 0) {
+	if (git_commit_tree(&parent_tree, parent) < 0) {
 		liberror("git_commit_tree");
 		git_tree_free(commit_tree);
 		git_commit_free(parent);
