@@ -465,7 +465,8 @@ main(int argc, char **argv)
 
 	ret = find_fixes(repo, walker, &cids, &tagged);
 	if (ret != 0) {
-		liberror("find_fixes");
+		fprintf(stderr, "find_fixes: unable to find one or more of the "
+			"specified commits in the upstream repo.");
 		exit(1);
 	}
 
