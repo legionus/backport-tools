@@ -22,6 +22,8 @@
 #include <getopt.h>
 
 #include "ccan/list/list.h"
+#include "ccan/htable/htable.h"
+#include "ccan/hash/hash.h"
 #include "ccan/ciniparser/ciniparser.h"
 #include "common.h"
 
@@ -130,26 +132,6 @@ extract_fixes_tags(git_repository *repo,
 	}
 }
 
-/*
- * If oid is on list, then remove it.
- *
- * Returns 1 if oid matched a hash on the list.  0 if no match.
- */
-int
-prune_list(struct list_head *cids, git_oid *oid)
-{
-	struct cid *cid, *next;
-	
-	list_for_each_safe(cids, cid, next, list) {
-		if (git_oid_streq(oid, cid->hash) == 0) {
-			list_del(&cid->list);
-			free(cid);
-			return 1;
-		}
-	}
-	return 0;
-}
-
 int
 parse_options(int argc, char **argv)
 {
@@ -198,20 +180,106 @@ parse_options(int argc, char **argv)
 	return optind;
 }
 
+struct defective {
+	struct list_head fixedby;
+	char hash[GIT_OID_HEXSZ + 1];
+};
+
+static bool
+defective_eq(const void *o, void *k)
+{
+	return(memcmp(((struct defective *) o)->hash, k, GIT_OID_HEXSZ) == 0);
+}
+
+static size_t
+defective_hash(const void *o, void __attribute__((unused)) *unused)
+{
+	return hash_string(((struct defective *) o)->hash);
+}
+
+void
+free_defective(struct htable *ht)
+{
+	void *p;
+	struct htable_iter i;
+
+	for (p = htable_first(ht, &i); p; p = htable_next(ht, &i)) {
+		struct htable_iter i2;
+		void *c;
+		size_t h = ht->rehash(p, ht->priv);
+
+		for (c = htable_firstval(ht, &i2, h);
+		     c;
+		     c = htable_nextval(ht, &i2, h)) {
+			if (c == p) {
+				free_cids(&((struct defective *) c)->fixedby);
+				free(c);
+				break;
+			}
+		}
+	}
+}
+
+static int
+in_list(struct list_head *cids, git_oid *oid)
+{
+	struct cid *cid;
+
+	list_for_each(cids, cid, list) {
+		if (git_oid_streq(oid, cid->hash) == 0)
+			return 1;
+	}
+	return 0;
+}
+
+static void
+append_commit(struct list_head *list, char *hash)
+{
+	struct cid *cid = malloc(sizeof(*cid));
+
+	memcpy(cid->hash, hash, GIT_OID_HEXSZ);
+	cid->hash[GIT_OID_HEXSZ] = '\0';
+	list_add_tail(list, &cid->list);
+}
+
+static void
+append_fix(struct htable *ht, char *hash, char *fix_hash)
+{
+	struct defective *commit = htable_get(ht, hash_string(hash),
+			defective_eq, hash);
+
+	if (!commit) {
+		commit = malloc(sizeof(*commit));
+		if (!commit) {
+			perror("malloc");
+			exit(1);
+		}
+
+		list_head_init(&commit->fixedby);
+
+		memcpy(commit->hash, hash, GIT_OID_HEXSZ);
+		commit->hash[GIT_OID_HEXSZ] = '\0';
+
+		htable_add(ht, hash_string(commit->hash), commit);
+	}
+
+	append_commit(&commit->fixedby, fix_hash);
+}
+
 /*
  * Find any commit ids with a Fixes: tag matching those listed in cids.
  *
- * Return value: Number of commits with Fixes: tags pointing to @cids.
+ * Return value: Number of @cids that were not found in tree.
  */
 int
 find_fixes(git_repository *repo, git_revwalk *walker,
-	   struct list_head *cids, struct list_head *result)
+           struct list_head *cids, struct htable *result)
 {
-	int nr_found = 0;
+	int nr_cids = 0;
 	int ret;
 	git_oid oid;
 	git_commit *commit = NULL;
-	struct cid *cid, *fix;
+	struct cid *cid, *defective;
 	const char *msg;
 
 	/*
@@ -226,21 +294,11 @@ find_fixes(git_repository *repo, git_revwalk *walker,
 
 	git_revwalk_sorting(walker, GIT_SORT_TOPOLOGICAL);
 
+	list_for_each(cids, cid, list)
+		nr_cids++;
+
 	while (git_revwalk_next(&oid, walker) == 0) {
 		LIST_HEAD(fixes);
-
-		/*
-		 * Check to see if we've passed a commit, and
-		 * therefore no longer need to check for fixes for it.
-		 * Do this first, as there's no use checking to see if
-		 * this commit fixed something else on the list.
-		 * After all, we've already included it.
-		 */
-		if (prune_list(cids, &oid)) {
-			if (list_empty(cids))
-				break;
-			continue;
-		}
 
 		ret = git_commit_lookup(&commit, repo, &oid);
 		if (ret < 0) {
@@ -253,30 +311,27 @@ find_fixes(git_repository *repo, git_revwalk *walker,
 		list_head_init(&fixes);
 		extract_fixes_tags(repo, msg, &fixes);
 
-		/*
-		 * Check to see if the Fixes: tags contain commit hashes
-		 * requested by the user.
-		 */
-		list_for_each(&fixes, fix, list) {
-			list_for_each(cids, cid, list) {
-				if (!memcmp(fix->hash, cid->hash,
-					    GIT_OID_HEXSZ)) {
-					char *hash = git_oid_tostr_s(&oid);
-					ret = add_commit(repo, result, hash);
-					if (ret)
-						return -1;
-					nr_found++;
-					goto next;
-				}
-			}
+		if (!list_empty(&fixes)) {
+			char fix_hash[GIT_OID_HEXSZ + 1];
+			git_oid_tostr(fix_hash, GIT_OID_HEXSZ + 1, &oid);
+
+			list_for_each(&fixes, defective, list)
+				append_fix(result, defective->hash, fix_hash);
 		}
-next:
+
 		free_cids(&fixes);
 		git_commit_free(commit);
+
+		if (in_list(cids, &oid)) {
+			nr_cids--;
+			if (!nr_cids) {
+				break;
+			}
+		}
 	}
 
 	git_revwalk_reset(walker);
-	return nr_found;
+	return nr_cids;
 }
 
 int
@@ -285,9 +340,8 @@ main(int argc, char **argv)
 	int i, ret, next_opt;
 	git_repository *repo;
 	git_revwalk *walker;
-	struct cid *cid;
 	LIST_HEAD(cids);
-	LIST_HEAD(result);
+	struct htable tagged;
 	FILE *stream = stdout;
 
 	parse_config_file();
@@ -311,7 +365,7 @@ main(int argc, char **argv)
 	/* regex for extracting Fixes tags from commit messages */
 	regcomp(&preg, "^Fixes: ([0-9a-fA-F]+)", REG_EXTENDED|REG_NEWLINE);
 	list_head_init(&cids);
-	list_head_init(&result);
+	htable_init(&tagged, defective_hash, NULL);
 
 	git_libgit2_init();
 	ret = git_repository_open(&repo, repo_dir);
@@ -347,31 +401,44 @@ main(int argc, char **argv)
 		}
 	}
 
-	/*
-	 * Find any commits with Fixes: tags that reference the cids
-	 * listed on the command line.  This loop also finds fixes
-	 * to the fixes, and fixes to the fixes to the fixes, etc.
-	 */
-	while (1) {
-		ret = find_fixes(repo, walker, &cids, &result);
-		if (ret <= 0)
-			break;
-
-		/* print out the results */
-		list_for_each(&result, cid, list)
-			fprintf(stream, "%s\n", cid->hash);
-
-		/*
-		 * Move the "Fixes:" commits into the cids list, and
-		 * re-run the walk.  This will find the fixes for the
-		 * fixes (for the fixes (for the fixes....))
-		 */
-		list_head_init(&cids);
-		list_prepend_list(&cids, &result);
+	ret = find_fixes(repo, walker, &cids, &tagged);
+	if (ret != 0) {
+		liberror("find_fixes");
+		exit(1);
 	}
 
-	free_cids(&result);
+	do {
+		struct cid *cid, *fix, *next;
+
+		list_for_each_safe(&cids, cid, next, list) {
+			struct defective *commit = htable_get(&tagged,
+					hash_string(cid->hash), defective_eq,
+					cid->hash);
+
+			list_del(&cid->list);
+			free(cid);
+
+			/* no one fixes this commit. */
+			if (!commit)
+				continue;
+
+			/* print out the results */
+			list_for_each(&commit->fixedby, fix, list)
+				fprintf(stream, "%s\n", fix->hash);
+
+			/*
+			 * Move the "Fixes:" commits into the cids list, and
+			 * re-run the walk.  This will find the fixes for the
+			 * fixes (for the fixes (for the fixes....))
+			 */
+			list_append_list(&cids, &commit->fixedby);
+		}
+	} while (!list_empty(&cids));
+
 	free_cids(&cids);
+	free_defective(&tagged);
+	htable_clear(&tagged);
+	regfree(&preg);
 
 	git_revwalk_free(walker);
 	git_repository_free(repo);
