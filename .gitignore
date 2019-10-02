@@ -1,0 +1,11 @@
+config.h
+*.o
+*.diff
+*.patch
+*~
+*.orig
+\#*#
+find-fixes
+find-missing-commits
+order-commits
+tools_configurator_configurator
