@@ -224,7 +224,7 @@ find_fixes(git_repository *repo, git_revwalk *walker,
 		exit(1);
 	}
 
-	git_revwalk_sorting(walker, GIT_SORT_TIME);
+	git_revwalk_sorting(walker, GIT_SORT_TOPOLOGICAL);
 
 	while (git_revwalk_next(&oid, walker) == 0) {
 		LIST_HEAD(fixes);
