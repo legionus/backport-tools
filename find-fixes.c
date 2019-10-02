@@ -387,18 +387,18 @@ main(int argc, char **argv)
 			exit(1);
 	}
 
-	ret = git_revwalk_new(&walker, repo);
-	if (ret < 0) {
-		liberror("git_revwalk_new");
-		exit(1);
-	}
-
 	if (output_file) {
 		stream = fopen(output_file, "w+");
 		if (!stream) {
 			perror("fopen");
 			stream = stdout;
 		}
+	}
+
+	ret = git_revwalk_new(&walker, repo);
+	if (ret < 0) {
+		liberror("git_revwalk_new");
+		exit(1);
 	}
 
 	ret = find_fixes(repo, walker, &cids, &tagged);
