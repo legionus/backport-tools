@@ -51,6 +51,7 @@
 #include "ccan/htable/htable.h"
 #include "ccan/hash/hash.h"
 #include "ccan/ciniparser/ciniparser.h"
+#include "common.h"
 
 #define CONFIG_FILE ".backportrc"
 
@@ -60,7 +61,6 @@ static regex_t cherrypick_preg;
 static char *upstream_repo_dir, *downstream_repo_dir;
 static char *downstream_branch = "refs/heads/master";
 static char *start_commit;
-static char *output_file;
 
 #define SIZE_1G (1024 * 1024 * 1024)
 
@@ -105,12 +105,6 @@ print_help(int rc)
 	  "\n",
 	  program_invocation_short_name, downstream_branch);
 	exit(rc);
-}
-
-void
-liberror(const char *err)
-{
-	fprintf(stderr, "%s: %s\n", err, giterr_last()->message);
 }
 
 /*
@@ -184,7 +178,7 @@ hash_cmp(const void *e, void *string)
 }
 
 void
-add_commit(struct htable *ht, const char *commit_hash)
+add_commit_hash(struct htable *ht, const char *commit_hash)
 {
 	char *htable_ent = strdup(commit_hash);
 	htable_add(ht, hash_string(htable_ent), htable_ent);
@@ -547,9 +541,9 @@ walk_history(void *p)
 		    commit_modifies_paths(&diffopts, commit)) {
 			if (args->type == REPO_TYPE_UPSTREAM) {
 				git_oid_tostr(hash, GIT_OID_HEXSZ + 1, &oid);
-				add_commit(&args->ht, hash);
+				add_commit_hash(&args->ht, hash);
 			} else if (extract_backport(commit, hash) == 0) {
-				add_commit(&args->ht, hash);
+				add_commit_hash(&args->ht, hash);
 			}
 		}
 		git_commit_free(commit);

@@ -32,7 +32,7 @@ find-fixes: find-fixes.c ccan/hash/hash.o ccan/htable/htable.o common.o
 	$(MAKE) -C ccan/ciniparser
 	$(CC) $(COMMON_CFLAGS) $(INCLUDE) -o $@ $^ ccan/ciniparser/ciniparser.o ccan/ciniparser/dictionary.o $(LDFLAGS)
 
-find-missing-commits: find-missing-commits.c ccan/hash/hash.o ccan/htable/htable.o
+find-missing-commits: find-missing-commits.c ccan/hash/hash.o ccan/htable/htable.o common.o
 	$(MAKE) -C ccan/ciniparser
 	$(CC) $(COMMON_CFLAGS) $(INCLUDE) -o $@ $^ ccan/ciniparser/ciniparser.o ccan/ciniparser/dictionary.o $(LDFLAGS) -lpthread
 
