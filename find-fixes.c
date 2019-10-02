@@ -329,8 +329,11 @@ main(int argc, char **argv)
 	git_repository *repo;
 	git_revwalk *walker;
 	LIST_HEAD(cids);
+	struct cid *cid;
+	size_t nr_cids = 0;
 	struct htable tagged;
 	FILE *stream = stdout;
+	char *range = NULL;
 
 	parse_config_file();
 
@@ -399,6 +402,65 @@ main(int argc, char **argv)
 		exit(1);
 	}
 
+	list_for_each(&cids, cid, list)
+		nr_cids++;
+
+	if (nr_cids > 1) {
+		git_oid base;
+		char *oids = calloc(nr_cids, sizeof(git_oid));
+
+		i = 0;
+		list_for_each(&cids, cid, list) {
+			if (git_oid_fromstrp(
+				    (git_oid *)(oids + (i * sizeof(git_oid))),
+				    cid->hash) != 0) {
+				fprintf(stderr, "Unable to parse OID: %s\n",
+					cid->hash);
+				exit(1);
+			}
+			i++;
+		}
+
+		ret = git_merge_base_octopus(&base, repo, nr_cids, (git_oid *)oids);
+		if (!ret) {
+			if (asprintf(&range, "%s^..",
+				     git_oid_tostr_s(&base)) < 0) {
+				perror("asprintf");
+				exit(1);
+			}
+		} else if (ret < 0 && ret != GIT_ENOTFOUND) {
+			liberror("git_merge_base_many");
+			exit(1);
+		}
+
+	} else if (nr_cids == 1) {
+		char *range;
+
+		cid = list_top(&cids, struct cid, list);
+		if (!cid) {
+			fprintf(stderr, "Unable to get first cid from list!\n");
+			exit(1);
+		}
+
+		if (asprintf(&range, "%s^..", cid->hash) < 0) {
+			perror("asprintf");
+			exit(1);
+		}
+
+	} else {
+		fprintf(stderr, "Nothing to do.\n");
+		exit(1);
+	}
+
+	if (range) {
+		ret = git_revwalk_push_range(walker, range);
+		if (ret < 0) {
+			liberror("git_revwalk_push_range");
+			exit(1);
+		}
+		free(range);
+	}
+
 	git_revwalk_sorting(walker, GIT_SORT_TOPOLOGICAL);
 
 	ret = find_fixes(repo, walker, &cids, &tagged);
@@ -408,7 +470,7 @@ main(int argc, char **argv)
 	}
 
 	do {
-		struct cid *cid, *fix, *next;
+		struct cid *fix, *next;
 
 		list_for_each_safe(&cids, cid, next, list) {
 			struct defective *commit = htable_get(&tagged,
