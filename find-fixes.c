@@ -282,18 +282,6 @@ find_fixes(git_repository *repo, git_revwalk *walker,
 	struct cid *cid, *defective;
 	const char *msg;
 
-	/*
-	 * Walk the history of the master branch, not whatever happens
-	 * to be checked out right now.
-	 */
-	ret = git_revwalk_push_ref(walker, "refs/heads/master");
-	if (ret < 0) {
-		liberror("git_revwalk_push_ref");
-		exit(1);
-	}
-
-	git_revwalk_sorting(walker, GIT_SORT_TOPOLOGICAL);
-
 	list_for_each(cids, cid, list)
 		nr_cids++;
 
@@ -400,6 +388,18 @@ main(int argc, char **argv)
 		liberror("git_revwalk_new");
 		exit(1);
 	}
+
+	/*
+	 * Walk the history of the master branch, not whatever happens
+	 * to be checked out right now.
+	 */
+	ret = git_revwalk_push_ref(walker, "refs/heads/master");
+	if (ret < 0) {
+		liberror("git_revwalk_push_ref");
+		exit(1);
+	}
+
+	git_revwalk_sorting(walker, GIT_SORT_TOPOLOGICAL);
 
 	ret = find_fixes(repo, walker, &cids, &tagged);
 	if (ret != 0) {
