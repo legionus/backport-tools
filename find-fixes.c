@@ -8,7 +8,6 @@
  * Copyright(C) Red Hat, Inc., 2018, 2019
  *
  * TODO:
- * - better usage text: document defaults, etc
  * - factor out shared boilerplate between this and order-commits
  * - allow user to override default branch
  */
@@ -16,10 +15,10 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
-#include <libgen.h>
 #include <sys/types.h>
 #include <regex.h>
 #include <getopt.h>
+#include <errno.h>
 
 #include "ccan/list/list.h"
 #include "ccan/htable/htable.h"
@@ -35,11 +34,26 @@ static char *repo_dir;
 static char *input_file;
 static char *output_file;
 
-void
-usage(const char *prog)
+void __attribute__ ((noreturn))
+print_help(int rc)
 {
-	printf("%s [-r <repo path>] {-i <input cid file> | <cid> [cid] ...} "
-	       "[-o <output file>\n", prog);
+	printf(
+	  "Usage: %1$s [OPTIONS] <cid> [cid] ...\n"
+	  "   or: %1$s [OPTIONS] -i <file>\n"
+	  "\n"
+	  "This utility is used to find commits which have a \"Fixes:\" tag\n"
+	  "for any of the provided commits.\n"
+	  "\n"
+	  "Options:\n"
+	  "  -r, --repo=<repo>          use the specified repository for search;\n"
+	  "  -i, --input-file=<file>    read the commits from the specified file;\n"
+	  "  -o, --output-file=<file>   write the found commits to the file;\n"
+	  "  -h, --help                 show this message and exit.\n"
+	  "\n"
+	  "Report bugs to authors.\n"
+	  "\n",
+	  program_invocation_short_name);
+	exit(rc);
 }
 
 /*
@@ -140,10 +154,11 @@ parse_options(int argc, char **argv)
 		{"repo",	required_argument, NULL, 'r' },
 		{"input-file",	required_argument, NULL, 'i' },
 		{"output-file",	required_argument, NULL, 'o' },
+		{"help",	no_argument, NULL, 'h' },
 	};
 
 	while (1) {
-		c = getopt_long(argc, argv, "r:i:o:", long_options, NULL);
+		c = getopt_long(argc, argv, "r:i:o:h", long_options, NULL);
 		if (c == -1)
 			break;
 
@@ -171,9 +186,13 @@ parse_options(int argc, char **argv)
 				return -1;
 			}
 			break;
+		case 'h':
+			print_help(0);
+			break;
 		default:
 			printf("Invalid argument '%c'\n", c);
-			return -1;
+			print_help(1);
+			break;
 		}
 	}
 
@@ -342,8 +361,7 @@ main(int argc, char **argv)
 		exit(1);
 	if (next_opt == argc && !input_file) {
 		printf("No commit hashes specified.\n");
-		usage(basename(argv[0]));
-		exit(1);
+		print_help(1);
 	}
 
 	/*

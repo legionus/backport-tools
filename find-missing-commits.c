@@ -31,9 +31,6 @@
  * correct downstream hash to start the history walk.
  *
  * TODO:
- * - walk upstream and downstream in parallel
- * - change from a list to a hash table
- * - better usage text: document defaults, etc
  * - try to figure out the right downstream branch automatically
  * - keep a tree of commits in order, so we can print out a sorted list
  *   of commits, from start to finish.  Otherwise, user needs to run output
@@ -44,12 +41,12 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
-#include <libgen.h>
 #include <sys/types.h>
 #include <regex.h>
 #include <getopt.h>
 #include <pthread.h>
 #include <git2.h>
+#include <errno.h>
 
 #include "ccan/htable/htable.h"
 #include "ccan/hash/hash.h"
@@ -81,6 +78,33 @@ usage(const char *prog)
 	printf(
 "%s -u <upstream repo path> -d <downstream repo path> -b <downstream branch>\n"
 "\t-s <start commit> -o <output file>[path[, path] ...] ", prog);
+}
+
+void __attribute__ ((noreturn))
+print_help(int rc)
+{
+	printf(
+	  "Usage: %s <options> [path][,path]...\n"
+	  "\n"
+	  "Given two trees and an optional list of files, determine which commits\n"
+	  "exist in tree A that don't exist in tree B.\n"
+	  "\n"
+	  "If the start-commit is backported to the downstream repository,\n"
+	  "then the tool will automatically figure that out, and use the\n"
+	  "correct downstream hash to start the history walk.\n"
+	  "\n"
+	  "Options:\n"
+	  "  -u, --upstream-repo=<path>      path to upstream git repository;\n"
+	  "  -d, --downstream-repo=<path>    path to downstream git repository;\n"
+	  "  -b, --downstream-branch=<rev>   set downstream branch\n"
+	  "                                  (default: %s);\n"
+	  "  -s, --start-commit=<rev>        set the commit from which to start;\n"
+	  "  -h, --help                      show this message and exit.\n"
+	  "\n"
+	  "Report bugs to authors.\n"
+	  "\n",
+	  program_invocation_short_name, downstream_branch);
+	exit(rc);
 }
 
 void
@@ -228,11 +252,12 @@ parse_options(int argc, char **argv)
 		{"downstream-repo",	required_argument, NULL, 'd' },
 		{"downstream-branch",	required_argument, NULL, 'b' },
 		{"start-commit",	required_argument, NULL, 's' },
+		{"help",	no_argument, NULL, 'h' },
 		/* TODO: excludes file with list of commits we don't want */
 	};
 
 	while (1) {
-		c = getopt_long(argc, argv, "u:d:b:s:o:", long_options, NULL);
+		c = getopt_long(argc, argv, "u:d:b:s:o:h", long_options, NULL);
 		if (c == -1)
 			break;
 
@@ -267,9 +292,13 @@ parse_options(int argc, char **argv)
 				return -1;
 			}
 			break;
+		case 'h':
+			print_help(0);
+			break;
 		default:
 			printf("Invalid argument '%c'\n", c);
-			return -1;
+			print_help(1);
+			break;
 		}
 	}
 
@@ -553,8 +582,7 @@ main(int argc, char **argv)
 	}
 
 	if (!upstream_repo_dir || !downstream_repo_dir || !start_commit) {
-		usage(basename(argv[0]));
-		exit(1);
+		print_help(1);
 	}
 
 	git_libgit2_init();
