@@ -1,0 +1,67 @@
+DESCRIPTION
+
+These tools aid in backporting patches from one git tree to another,
+older tree (fork).  For example, they can be used to identify patches
+that are present in the master branch of the kernel, but are missing
+from a stable tree.  Typical use cases include backporting a feature
+or backporting an entire subsystem.
+
+The following tools are included:
+
+find-missing-commits
+find-fixes
+order-commits
+
+Let's say you want to backport driver fixes from upstream to a stable
+kernel.  You can start by identifying the commits which are missing
+from the stable kernel:
+
+$ find-missing-commits -u /sbox/src/kernel/upstream/linux \
+	-d /sbox/src/kernel/upstream/linux-stable \
+	-b linux-4.18.y \
+	-s v4.18 \
+	drivers/scsi/mpt3sas
+
+In this example, we specify the path to the upstream repository, the
+downstream repository, the downstream branch to use (we're interested
+in backporting to the 4.18.y stable branch), the start commit, and the
+path(s) we're interested in.
+
+The output will be a list of commit hashes that are missing from the
+downstream branch.  If we redirect the output to a file, say
+mpt3sas.cids, we can then use that file as input to the next two
+commands.
+
+$ find-fixes -r /sbox/src/kernel/upstream/linux -i mpt3sas.cids
+
+This will output a list of commits that have a Fixes: tag pointing to
+one (or more) of the commits in the mpt3sas.cids list.  If you combine
+the two sets of commits, you can then order them so that they can be
+applied:
+
+$ find-fixes -r /sbox/src/kernel/upstream/linux -i mpt3sas.cids >> mpt3sas.cids
+$ order-commits -i mpt3sas.cids -o mpt3sas.cids-ordered
+
+And now you have an ordered (oldest to newest) list of commits to be
+backported.  Of course, this isn't foolproof.  You may decide that
+some of the commits aren't needed, or some commits may have
+prerequisites elsewhere in the kernel.  That part is still left as an
+exercise for the reader.
+
+CONFIGURATION FILES
+
+The tools all read "~/.backportrc".  It's an ini-style config file, and
+currently only supports one section/entry:
+
+---
+[repo]
+path = /sbox/src/kernel/upstream/linux
+---
+
+BUILDING
+
+libgit2 is required.  For Red Hat distributions:
+
+# yum install libgit2-devel
+
+Then, simply type 'make'.
