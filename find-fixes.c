@@ -335,8 +335,15 @@ find_fixes(git_repository *repo, git_revwalk *walker,
 			char fix_hash[GIT_OID_HEXSZ + 1];
 			git_oid_tostr(fix_hash, GIT_OID_HEXSZ + 1, &oid);
 
-			list_for_each(&fixes, defective, list)
-				append_fix(result, defective->hash, fix_hash);
+			list_for_each(&fixes, defective, list) {
+				/*
+				 * Only add a fix if it isn't present in the
+				 * list of commits.
+				 */
+				if (!in_list(cids, &oid))
+					append_fix(result, defective->hash,
+						   fix_hash);
+			}
 		}
 
 		free_cids(&fixes);
