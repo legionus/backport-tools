@@ -21,6 +21,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
  *
  * TODO:
+ * - report which commits (if any) were not found in the upstream repo
  * - factor out shared boilerplate between this and order-commits
  * - allow user to override default branch
  */
@@ -504,8 +505,7 @@ main(int argc, char **argv)
 	ret = find_fixes(repo, walker, &cids, &tagged);
 	if (ret != 0) {
 		fprintf(stderr, "find_fixes: unable to find one or more of the "
-			"specified commits in the upstream repo.");
-		exit(1);
+			"specified commits in the upstream repo.\n");
 	}
 
 	do {
