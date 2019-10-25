@@ -40,6 +40,18 @@ abbrev_to_full_hash(git_repository *repo, char *abbrev, int len, char *out)
 	return 0;
 }
 
+struct cid *
+lookup_commit(struct list_head *list, char *commit_hash)
+{
+	struct cid *cid;
+
+	list_for_each(list, cid, list) {
+		if (!strncmp(cid->hash, commit_hash, GIT_OID_HEXSZ))
+			return cid;
+	}
+	return NULL;
+}
+
 /*
  * Add commit_hash to list.  No validation of the hash is performed, so
  * only call this function with a known valid hash.
@@ -48,6 +60,10 @@ void
 __add_commit(struct list_head *list, char *commit_hash)
 {
 	struct cid *cid = malloc(sizeof(*cid));
+
+	/* don't add duplicate entries */
+	if (lookup_commit(list, commit_hash))
+		return;
 
 	memcpy(cid->hash, commit_hash, GIT_OID_HEXSZ);
 	cid->hash[GIT_OID_HEXSZ] = '\0';
@@ -74,10 +90,14 @@ add_commit(git_repository *repo, struct list_head *list, char *commit_hash)
 	ret = abbrev_to_full_hash(repo, commit_hash, len, cid->hash);
 	if (ret < 0) {
 		liberror("invalid hash");
-		printf("\"%s\"\n", commit_hash);
 		return -1;
 	}
-	list_add(list, &cid->list);
+	/* Don't add duplicate entries */
+	if (!lookup_commit(list, cid->hash))
+		list_add(list, &cid->list);
+	else
+		free(cid);
+
 	return 0;
 }
 
