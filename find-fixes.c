@@ -406,10 +406,8 @@ main(int argc, char **argv)
 
 	if (next_opt < argc) {
 		/* any remaining arguments are commit hashes to check */
-		for (i = next_opt; i < argc; i++) {
-			if (add_commit(repo, &cids, argv[i]))
-				exit(1);
-		}
+		for (i = next_opt; i < argc; i++)
+			add_commit(repo, &cids, argv[i]);
 	}
 	if (input_file) {
 		ret = add_hashes_from_file(repo, input_file, &cids);
@@ -504,8 +502,13 @@ main(int argc, char **argv)
 
 	ret = find_fixes(repo, walker, &cids, &tagged);
 	if (ret != 0) {
-		fprintf(stderr, "find_fixes: unable to find one or more of the "
-			"specified commits in the upstream repo.\n");
+		fprintf(stderr, "find_fixes: internal error: ret=%d. "
+			"Maybe unable to find one or more of the "
+			"specified commits in the upstream repo.\n", ret);
+		fprintf(stderr, "Please report this problem, along with the"
+			" command line used to generate this failure, to the"
+			" authors.\n");
+		fprintf(stderr, "Note: results may be incomplete.\n");
 	}
 
 	do {
