@@ -389,11 +389,22 @@ commit_modifies_paths(git_diff_options *diffopts, git_commit *commit)
 void
 init_regexes(void)
 {
-	regcomp(&backport_preg, "^commit ([0-9a-f]{40})",
-		REG_EXTENDED|REG_NEWLINE);
-	regcomp(&cherrypick_preg,
-		"^[:space:]*\(cherry picked from commit ([0-9a-f]{40}))",
-		REG_EXTENDED|REG_NEWLINE);
+	int ret;
+
+	ret = regcomp(&backport_preg, "^commit ([0-9a-f]{40})",
+		      REG_EXTENDED|REG_NEWLINE);
+	if (ret) {
+		perror("regcomp");
+		exit(1);
+	}
+
+	ret = regcomp(&cherrypick_preg,
+		      "^[:space:]*\(cherry picked from commit ([0-9a-f]{40})\)",
+		      REG_EXTENDED|REG_NEWLINE);
+	if (ret) {
+		perror("regcomp");
+		exit(1);
+	}
 }
 
 /*
